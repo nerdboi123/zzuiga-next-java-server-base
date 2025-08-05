@@ -1,26 +1,36 @@
-name: Deploy to Amazon ECS
+name: nerdboi123 Cluster Server Deploy
 
 on:
   push:
     branches:
       - main
 
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform'
+        required: true
+        default: 'deploy'
+        type: choice
+        options:
+          - deploy
+          - restart
+
 env:
   AWS_REGION: ap-northeast-2
-  ECR_REGISTRY: 077672914621.dkr.ecr.ap-northeast-2.amazonaws.com
-  ECR_REPOSITORY: taebin
-  IMAGE_TAG: latest
+  CLUSTER_NAME: teamGo-taebin-cluster
+  SERVICE_NAME: taebin-service2
+  CONTAINER_NAME: taebin-ecr
+  REPOSITORY_NAME: taebin
 
 jobs:
   deploy:
+    name: Deploy or Restart ECS Service
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
+      - name: Checkout source
         uses: actions/checkout@v3
-
-      - name: Build with Gradle
-        run: ./gradlew clean build
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
@@ -30,13 +40,27 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR
-        uses: aws-actions/amazon-ecr-login@v2
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
 
-      - name: Build and push Docker image
+      - name: Build and push Docker image to ECR
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'deploy')
+        id: build-image
         run: |
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          ./gradlew clean build
+          IMAGE_URI="${{ steps.login-ecr.outputs.registry }}/${{ env.REPOSITORY_NAME }}:latest"
+          docker build -t "$IMAGE_URI" .
+          docker push "$IMAGE_URI"
+          echo "image_uri=$IMAGE_URI" >> $GITHUB_ENV
 
-      - name: Deploy to ECS with force-new-deployment
+      - name: Deploy or Restart ECS Service
         run: |
-          aws ecs update-service --cluster ${{ secrets.ECS_CLUSTER_NAME }} --service ${{ secrets.ECS_SERVICE_NAME }} --force-new-deployment --region $AWS_REGION
+          aws ecs update-service \
+            --cluster ${{ env.CLUSTER_NAME }} \
+            --service ${{ env.SERVICE_NAME }} \
+            --force-new-deployment
+        env:
+          AWS_REGION: ${{ env.AWS_REGION }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.action == 'deploy' || github.event.inputs.action == 'restart'))
